@@ -234,9 +234,13 @@ String ssh_password = "";
 int ssh_port = 22;
 
 static void* evilAlloc(size_t size) {
+#ifdef CARDENZA_TARGET
+  return heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#else
   void* p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!p) p = heap_caps_malloc(size, MALLOC_CAP_8BIT);
   return p;
+#endif
 }
 
 
@@ -824,7 +828,17 @@ bool Colorful                   = true;
 //#define PIN 25 // for M5Stack Core AWS comment above and uncomment this line
 #define NUMPIXELS 1
 
+#ifdef CARDENZA_TARGET
+// RGB is absent: no object constructor/destructor can claim LED EN21.
+struct {
+  void begin() {}
+  static uint32_t Color(uint8_t r, uint8_t g, uint8_t b) {return (r<<16)|(g<<8)|b;}
+  void setPixelColor(int, uint32_t) {}
+  void show() {}
+} pixels;
+#else
 Adafruit_NeoPixel pixels = Adafruit_NeoPixel(NUMPIXELS, PIN, NEO_GRB);
+#endif
 int delayval = 100;
 
 
@@ -1575,9 +1589,15 @@ void setupNavigatorRoutes() {
 
 // ── End Navigator WebUI ─────────────────────────────────────────────────────
 
+#include "sdk_compat.h"
+
 void setup() {
   Serial.begin(115200);
+#ifdef CARDENZA_TARGET
+  evilCardenzaBegin();
+#else
   M5.begin();
+#endif
   M5.Lcd.setRotation(1);
   M5.Display.setTextSize(1.5);
   M5.Display.setTextColor(menuTextUnFocusedColor);
@@ -1897,7 +1917,12 @@ void setup() {
   int randomIndex = random(numMessages);
   const char* randomMessage = startUpMessages[randomIndex];
 
+#ifdef CARDENZA_TARGET
+  // StampS3's Arduino aliases are -1; SD uses SPI2, separate from LCD SPI3.
+  SPI.begin(40, 39, 14, 12);
+#else
   SPI.begin(SCK, MISO, MOSI, -1);
+#endif
   if (!SD.begin(12, SPI, 40000000UL)) {
     Serial.println(F("Error.."));
     Serial.println(F("SD card not mounted..."));
@@ -1931,6 +1956,7 @@ void setup() {
       }
     }
 
+#ifndef CARDENZA_TARGET
     String batteryLevelStr = getBatteryLevel();
     int batteryLevel = batteryLevelStr.toInt();
 
@@ -1941,6 +1967,8 @@ void setup() {
       Serial.println(F("-------------------"));
       delay(1000);
     }
+
+#endif
 
     // Récupérer les paramètres configurés
     restoreConfigParameter("brightness");
@@ -2167,7 +2195,11 @@ void setup() {
   pixels.begin(); // led init
 
   // GPS sur RX=gpsRxPin, pas de TX (-1), baudrate = 9600 (par ex.)
+#ifndef CARDENZA_TARGET
   cardgps.begin(baudrate_gps, SERIAL_8N1, gpsRxPin, gpsTxPin);
+#else
+  Serial.println("GPS unavailable: Cardenza connector pins are codec/keyboard pins");
+#endif
 
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true);
@@ -2296,6 +2328,7 @@ void drawTaskBar() {
     taskBarCanvas.print(String(WiFi.localIP().toString() != "0.0.0.0" ? "On" : "Off"));
     taskBarCanvas.setTextColor(taskbarTextColor);
 
+#ifndef CARDENZA_TARGET
     // Get/Draw Battery Level
     String batteryLevel = getBatteryLevel();
     int batteryWidth = taskBarCanvas.textWidth(batteryLevel + "%");
@@ -2306,6 +2339,7 @@ void drawTaskBar() {
     taskBarCanvas.setTextColor(batteryLevelInt >= 70 ? TFT_GREEN :
                                (batteryLevelInt >= 40 ? TFT_YELLOW : TFT_RED));
     taskBarCanvas.print(batteryLevel + "%");
+#endif
   } else {
     // Afficher le nombre de personnes connectées
     int connectedPeople = getConnectedPeopleCount();
@@ -2327,11 +2361,13 @@ void drawTaskBar() {
     taskBarCanvas.setTextColor(taskbarTextColor);
     taskBarCanvas.print("C:" + String(WiFi.localIP().toString() != "0.0.0.0" ? "On" : "Off"));
 
+#ifndef CARDENZA_TARGET
     // Afficher le niveau de batterie à droite
     String batteryLevel = getBatteryLevel();
     int batteryWidth = taskBarCanvas.textWidth(batteryLevel + "%");
     taskBarCanvas.setCursor(taskBarCanvas.width() - batteryWidth - 5, 2); // Positionner à droite
     taskBarCanvas.print(batteryLevel + "%");
+#endif
   }
 
   // Afficher l'indicateur de point clignotant pour les accès aux pages et DNS
@@ -6725,6 +6761,9 @@ String oldTemperature = "";
 #endif
 
 String getBatteryLevel() {
+#ifdef CARDENZA_TARGET
+  return String("N/A");
+#else
   int percent = -1;
 
   if (M5.getBoard() == m5::board_t::board_M5Cardputer) {
@@ -6813,15 +6852,18 @@ String getBatteryLevel() {
   } else {
     return String(percent);
   }
+#endif
 }
 
-
-
 String getTemperature() {
+#ifdef CARDENZA_TARGET
+  return String("N/A");
+#else
   float temperature;
   M5.Imu.getTemp(&temperature);
   int roundedTemperature = round(temperature);
   return String(roundedTemperature);
+#endif
 }
 
 String getStack() {
@@ -6853,7 +6895,11 @@ void displayMonitorPage3() {
   M5.Display.setCursor(10 / 4, 30);
   M5.Display.println("RAM: " + oldRamUsage + " Ko");
   M5.Display.setCursor(10 / 4, 45);
+#ifdef CARDENZA_TARGET
+  M5.Display.println("Battery: unavailable");
+#else
   M5.Display.println("Battery: " + oldBatteryLevel + "%");
+#endif
 
   M5.Display.display();
   lastUpdateTime = millis();
@@ -6886,7 +6932,9 @@ void displayMonitorPage3() {
       String newStack = getStack();
       String newRamUsage = getRamUsage();
       String newBatteryLevel = getBatteryLevel();
+#ifndef CARDENZA_TARGET
       int newBatteryCurrent = M5.Power.getBatteryCurrent();
+#endif
 
       // Afficher les valeurs mises à jour
       if (newStack != oldStack) {
@@ -6903,7 +6951,11 @@ void displayMonitorPage3() {
 
       if (newBatteryLevel != oldBatteryLevel) {
         M5.Display.setCursor(10 / 4, 45);
+#ifdef CARDENZA_TARGET
+        M5.Display.println("Battery: unavailable");
+#else
         M5.Display.println("Battery: " + newBatteryLevel + "%");
+#endif
         oldBatteryLevel = newBatteryLevel;
       }
 
@@ -7127,7 +7179,9 @@ void showSettingsMenu() {
 
         options.push_back({"Brightness", brightness});
         options.push_back({soundOn ? "Disable Sound" : "Enable Sound", []() {toggleSound();}});
+#ifndef CARDENZA_TARGET
         options.push_back({ledOn ? "Disable LED" : "Enable LED", []() {toggleLED();}});
+#endif
         options.push_back({String("Switch GPS Pins to: ") + ((gpsPinsMode == 1 || (gpsRxPin == 15 && gpsTxPin == 13)) ? "1/2" : ((gpsPinsMode == 0 || (gpsRxPin == 1 && gpsTxPin == -1)) ? "15/13" : "Auto")), [](){ toggleGpsPinsMode(); }});
         options.push_back({"Set GPS Baudrate", []() {setGPSBaudrate();}});
         options.push_back({"Set Startup Image", setStartupImage});
@@ -7263,7 +7317,11 @@ void setGPSBaudrate() {
             M5.Display.setCursor(5, M5.Display.height() / 2);
             M5.Display.print("GPS Baudrate set to\n" + String(baudrate_gps));
             cardgps.end();
+#ifndef CARDENZA_TARGET
             cardgps.begin(baudrate_gps, SERIAL_8N1, gpsRxPin, gpsTxPin);
+#else
+            Serial.println("GPS unavailable: Cardenza connector pins are codec/keyboard pins");
+#endif
             delay(1000);
             baudrateSelected = true;
         } 
@@ -7937,7 +7995,11 @@ void toggleGpsPinsMode() {
   saveConfigParameter("gps_pins_mode", gpsPinsMode);
   // Re-init GPS UART if possible
   cardgps.end();
+#ifndef CARDENZA_TARGET
   cardgps.begin(baudrate_gps, SERIAL_8N1, gpsRxPin, gpsTxPin);
+#else
+  Serial.println("GPS unavailable: Cardenza connector pins are codec/keyboard pins");
+#endif
   M5.Display.fillScreen(menuBackgroundColor);
   M5.Display.setCursor(5, M5.Display.height()/2);
   if (gpsPinsMode == 1) {
@@ -11102,12 +11164,14 @@ uint8_t deauth_frame[26] = {
 
 // Warning
 // You need to bypass the ESP32 firmware with script in utilities folder before compiling or the code can't compile due to restrictions on ESP32 firmware
+#ifndef CARDENZA_TARGET
 extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32_t arg3) {
   if (arg == 31337)
     return 1;
   else
     return 0;
 }
+#endif // Cardenza keeps the unmodified SDK raw-frame validation.
 // Warning
 
 // Function to update MAC addresses in the global deauth frame
@@ -12733,7 +12797,8 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
       recordFlipper(name, macAddress, deviceColor, isValidMac);
       lastFlipperFoundMillis = millis();
     }
-    std::string advData = advertisedDevice.getManufacturerData();
+    const auto manufacturerData = advertisedDevice.getManufacturerData();
+    std::string advData(manufacturerData.c_str(), manufacturerData.length());
     if (advData.length() > 0) {
       const uint8_t* payload = reinterpret_cast<const uint8_t*>(advData.c_str());
       size_t length = advData.length();
@@ -15422,7 +15487,7 @@ void startWardivingMaster() {
         Serial.println(F("Error initializing ESP-NOW"));
         return;
     }
-    esp_now_register_recv_cb(OnDataRecv);
+    evilRegisterRecvCallback(static_cast<esp_now_recv_cb_t>(OnDataRecv));
     updateFileName();
     printHeader();
 
@@ -15694,7 +15759,7 @@ void sniffMaster(){
 
   WiFi.mode(WIFI_STA); WiFi.disconnect();
   if(esp_now_init()!=ESP_OK){ Serial.println(F("ESP-NOW fail")); return; }
-  esp_now_register_recv_cb(onRecv);
+  evilRegisterRecvCallback(onRecv);
 
   displayStatus();
 
@@ -21111,7 +21176,7 @@ void EvilChatMesh() {
     if (esp_now_init() != ESP_OK) {
         M5.Display.println("ESP‑NOW init failed"); return;
     }
-    esp_now_register_recv_cb(OnDataRecvChat);
+    evilRegisterRecvCallback(OnDataRecvChat);
 
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, broadcastAddressEspNow, 6);
@@ -23042,7 +23107,11 @@ void startUARTShell() {
   renderScreen();
 
   uartAuto.end();
+#ifndef CARDENZA_TARGET
   cardgps.begin(baudrate_gps, SERIAL_8N1, gpsRxPin, gpsTxPin);
+#else
+  Serial.println("GPS unavailable: Cardenza connector pins are codec/keyboard pins");
+#endif
   uartShellRun = false;
   waitAndReturnToMenu("Back to menu");
 }
@@ -35032,7 +35101,11 @@ void c5_uartEnd() {
   g_c5_uart_on = false;
 
   // Restore GPS (comme ton code existant)
+#ifndef CARDENZA_TARGET
   cardgps.begin(baudrate_gps, SERIAL_8N1, 1, -1);
+#else
+  Serial.println("GPS unavailable: Cardenza connector pins are codec/keyboard pins");
+#endif
 
   Serial.println("[C5] UART stopped, GPS restored");
 }
@@ -39161,7 +39234,7 @@ void csiRadarMenu() {
         csi_known_count = 0;
         csi_filter_beacons = true;
 
-        esp_now_register_recv_cb([](const uint8_t* sender_mac, const uint8_t* data, int len) {
+        evilRegisterRecvCallback([](const uint8_t* sender_mac, const uint8_t* data, int len) {
             (void)data; (void)len;
             // Register each unique beacon MAC for CSI filtering
             for (int i = 0; i < csi_known_count; i++)
@@ -40227,7 +40300,7 @@ void totemCompassMenu() {
     memset(totem_recent, 0, sizeof(totem_recent));
     memset(totem_peers, 0, sizeof(totem_peers));
     totem_flash_until = 0; totem_group_uid = 0; totem_group_until = 0;
-    esp_now_register_recv_cb(totem_espnow_recv_cb);
+    evilRegisterRecvCallback(totem_espnow_recv_cb);
     totem_add_espnow_peer(TOTEM_BCAST);
     if (esp_wifi_get_mac(WIFI_IF_STA, totem_my_mac) != ESP_OK || memcmp(totem_my_mac, "\0\0\0\0\0\0", 6) == 0)
         esp_read_mac(totem_my_mac, ESP_MAC_WIFI_STA);
@@ -40302,7 +40375,7 @@ void totemCompassMenu() {
         esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B|WIFI_PROTOCOL_11G|WIFI_PROTOCOL_11N);
         esp_wifi_set_channel(TOTEM_CHANNEL, WIFI_SECOND_CHAN_NONE);
         esp_now_init();
-        esp_now_register_recv_cb(totem_espnow_recv_cb);
+        evilRegisterRecvCallback(totem_espnow_recv_cb);
         totem_add_espnow_peer(TOTEM_BCAST);
         totem_start_ble();
         Serial.println("[TOTEM] BLE+WiFi coex active");
@@ -40361,7 +40434,7 @@ void totemCompassMenu() {
         esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_LR);
         esp_wifi_config_espnow_rate(WIFI_IF_STA, WIFI_PHY_RATE_LORA_250K);
         esp_now_init();
-        esp_now_register_recv_cb(totem_espnow_recv_cb);
+        evilRegisterRecvCallback(totem_espnow_recv_cb);
         totem_add_espnow_peer(TOTEM_BCAST);
         continue;
     }
